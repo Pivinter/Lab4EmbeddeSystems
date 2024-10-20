@@ -1,0 +1,118 @@
+#include <avr/io.h>
+#include <util/delay.h>
+#include <string.h>
+
+uint8_t rcv_buff[84];
+uint8_t rcv_index = 0;
+uint16_t effect_dly = 100; 
+
+void rcv_complete_handler(uint8_t len);
+
+//-----------------------------------------------------------------------------
+void USART_Init(uint32_t baud)
+{
+  //Розрахунок швидкості(U2X = 0)
+  UBRR0H = (uint8_t)((F_CPU/(16*baud)-1)>>8);
+  UBRR0L = (uint8_t)(F_CPU/(16*baud) - 1);
+  UCSR0A = 0;
+  //Включити передавач та приймач
+  UCSR0B = (1 << RXEN0)|(1<<TXEN0);
+  //Налаштування фрейму передачі/прийому даних
+  //8-біт даних, 1-стоп біт, без перевірки парності
+  UCSR0C = (1<<UCSZ01)|(1<<UCSZ00);
+
+}
+
+//-----------------------------------------------------------------------------
+void USART_PutChar(uint8_t data)
+{
+  // Чекаємо завершення передачі даних
+  while (!(UCSR0A & (1<<UDRE0))){ ; }
+  // Почати передачу даних
+  UDR0 = data;
+}
+
+//-----------------------------------------------------------------------------
+uint8_t USART_Receive(void)
+{
+  // Чекаємо завершення прийому даних
+  while (!(UCSR0A & (1<<RXC0))){ ; }
+  // Повертаємо прийняті дані
+  return UDR0;
+}
+
+//-----------------------------------------------------------------------------
+void print_string(const char *str)
+{
+  while (*str) {
+    USART_PutChar(*str++);
+  }
+}
+
+//-----------------------------------------------------------------------------
+void uart_receive_line_nb(void)
+{
+  char tmp;
+
+  if (UCSR0A & (1<<RXC0)) {
+    tmp = UDR0;
+
+    if ((tmp == '\n') && (rcv_index > 0)) {
+      USART_PutChar(tmp);
+      rcv_complete_handler(rcv_index);
+      rcv_index = 0;
+    } else {
+      if ((rcv_index < 81) && (tmp != '\r')) {
+        rcv_buff[rcv_index++] = tmp;
+        rcv_buff[rcv_index] = '\0';
+        USART_PutChar(tmp);
+      }
+    }
+  }  
+}
+
+//-----------------------------------------------------------------------------
+void rcv_complete_handler(uint8_t len)
+{
+  // print_string((const char*) rcv_buff);
+  // print_string("\r\n");
+
+  if (0 == strcmp((const char*) rcv_buff, "help")) {
+    print_string("You entered help command)\r\n");
+  } else {
+    print_string("Error: Wrong command!\r\n");
+  }
+
+  //print_string((const char*) rcv_buff);
+  //print_string("\r\n");
+}
+//-----------------------------------------------------------------------------
+void effects_pool(void)
+{
+
+  PORTB ^= 1 << PB5;
+      
+}
+
+//==============================================================================
+int main(void)
+{
+  uint16_t dly1 = 0;
+
+  DDRB |= 1 << PB5;
+  USART_Init(9600);
+  print_string("Hello!\r\n> ");
+
+  for (;;)
+  {
+    uart_receive_line_nb();
+
+    if (++dly1 > effect_dly) {
+      dly1 = 0;
+      effects_pool();
+    }
+
+    _delay_ms(2);
+  }
+  return 0;
+}

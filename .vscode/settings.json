@@ -1,0 +1,46 @@
+{
+    "files.associations": {
+        "delay.h": "c",
+        "io.h": "c",
+        "test2": "c",
+        "string.h": "c"
+    },
+    "actionButtons": {
+        "defaultColor": "#FFFFFF", // Can also use string color names.
+        "loadNpmCommands":false, // Disables automatic generation of actions for npm commands.
+        "reloadButton":"↻", // Custom reload button text or icon (default ↻). null value enables automatic reload on configuration change
+        "commands": [
+            {
+                "cwd": "${workspaceFolder}", 	// Terminal initial folder ${workspaceFolder} and os user home as defaults
+                "name": "♻️ Build Projekt",
+                "color": "yellow",
+                "singleInstance": true,
+                //"type": "shell",
+                "command": "make", // This is executed in the terminal. echo ${file}
+            },
+            {
+                "cwd": "${workspaceFolder}",
+                "singleInstance": true,
+                "name": "🔼 Flash hex",
+                "color": "white",
+                //"type": "shell",
+                "command": "make flash",
+            },
+            {
+                "name": "$(debug-console) Serial console",
+                "color": "magenta",
+                "singleInstance": true,
+                //"type": "shell",
+                "command": "make serial",
+                "cwd": "${workspaceFolder}"
+		    },
+            {
+                "name": "$(tasks-remove) close terminals",
+                "color": "red",
+                "useVsCodeApi": true,
+                "command": "workbench.action.terminal.killAll"
+		    }
+        ]
+    },
+    "C_Cpp.errorSquiggles": "enabled"
+}

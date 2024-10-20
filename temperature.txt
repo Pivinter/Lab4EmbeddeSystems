@@ -1,0 +1,256 @@
+#include <avr/io.h>
+#include <util/delay.h>
+#include <string.h>
+
+uint8_t rcv_buff[84];
+uint8_t rcv_index = 0;
+uint16_t effect_dly = 100; // Initial delay for effects (speed)
+uint8_t effect = 0; // Effect selector (0: running_fire_l, 1: running_shadow, 2: johnson_counter)
+uint8_t effect_running = 0; // 1 = effect running, 0 = effect stopped
+
+#define HC595_DATA   PB3   // SER - Serial Data Input
+#define HC595_SHCP   PB5   // SRCLK - Shift Clock
+#define HC595_STCP   PB1   // RCLK - Storage Clock (Latch)
+#define HC595_PORT   PORTB
+
+void rcv_complete_handler(uint8_t len);
+
+// Function prototypes for effects
+void running_fire_l(void);
+void running_shadow(void);
+void johnson_counter(void);
+void handle_button(uint8_t kt);
+void execute_effect(void);
+void help(void);
+
+// USART functions
+void USART_Init(uint32_t baud);
+void USART_PutChar(uint8_t data);
+uint8_t USART_Receive(void);
+void print_string(const char *str);
+void uart_receive_line_nb(void);
+
+//-----------------------------------------------------------------------------
+void send_to_hc595(uint8_t val)
+{
+  for (uint8_t i = 0; i < 8; i++) 
+  {
+    if (val & 0x80) {
+      HC595_PORT |= (1 << HC595_DATA);
+    } else {
+      HC595_PORT &= ~(1 << HC595_DATA);
+    }
+    HC595_PORT |= (1 << HC595_SHCP); 
+    val <<= 1;     
+    _delay_us(5);                    
+    HC595_PORT &= ~(1 << HC595_SHCP);     
+  }
+  HC595_PORT |= (1 << HC595_STCP);          
+  _delay_us(10);                       
+  HC595_PORT &= ~(1 << HC595_STCP);         
+}
+
+
+//-----------------------------------------------------------------------------
+void USART_Init(uint32_t baud)
+{
+  //Розрахунок швидкості(U2X = 0)
+  UBRR0H = (uint8_t)((F_CPU/(16*baud)-1)>>8);
+  UBRR0L = (uint8_t)(F_CPU/(16*baud) - 1);
+  UCSR0A = 0;
+  //Включити передавач та приймач
+  UCSR0B = (1 << RXEN0)|(1<<TXEN0);
+  //Налаштування фрейму передачі/прийому даних
+  //8-біт даних, 1-стоп біт, без перевірки парності
+  UCSR0C = (1<<UCSZ01)|(1<<UCSZ00);
+
+}
+
+//-----------------------------------------------------------------------------
+void USART_PutChar(uint8_t data)
+{
+  // Чекаємо завершення передачі даних
+  while (!(UCSR0A & (1<<UDRE0))){ ; }
+  // Почати передачу даних
+  UDR0 = data;
+}
+
+//-----------------------------------------------------------------------------
+uint8_t USART_Receive(void)
+{
+  // Чекаємо завершення прийому даних
+  while (!(UCSR0A & (1<<RXC0))){ ; }
+  // Повертаємо прийняті дані
+  return UDR0;
+}
+
+//-----------------------------------------------------------------------------
+void print_string(const char *str)
+{
+  while (*str) {
+    USART_PutChar(*str++);
+  }
+}
+
+//-----------------------------------------------------------------------------
+void uart_receive_line_nb(void)
+{
+  char tmp;
+
+  if (UCSR0A & (1<<RXC0)) {
+    tmp = UDR0;
+
+    if ((tmp == '\n') && (rcv_index > 0)) {
+      USART_PutChar(tmp);
+      rcv_complete_handler(rcv_index);
+      rcv_index = 0;
+    } else {
+      if ((rcv_index < 81) && (tmp != '\r')) {
+        rcv_buff[rcv_index++] = tmp;
+        rcv_buff[rcv_index] = '\0';
+        USART_PutChar(tmp);
+      }
+    }
+  }  
+}
+
+//-----------------------------------------------------------------------------
+// Help function to display all available commands
+void help(void)
+{
+  print_string("Available commands:\r\n");
+  print_string("start     - Start the current effect\r\n");
+  print_string("stop      - Stop the current effect\r\n");
+  print_string("speed <n> - Set the effect speed (n: delay in ms)\r\n");
+  print_string("effect <n> - Select an effect (0: running_fire_l, 1: running_shadow, 2: johnson_counter)\r\n");
+  print_string("help      - Show this help message\r\n");
+}
+
+//-----------------------------------------------------------------------------
+// Command Handler: Responds to "start", "stop", "speed <value>", "effect <number>", "help"
+void rcv_complete_handler(uint8_t len)
+{
+  if (strcmp((const char*)rcv_buff, "start") == 0) {
+    effect_running = 1;
+    print_string("Effect started\r\n");
+  } 
+  else if (strcmp((const char*)rcv_buff, "stop") == 0) {
+    effect_running = 0;
+    print_string("Effect stopped\r\n");
+  } 
+  else if (strncmp((const char*)rcv_buff, "speed", 5) == 0) {
+    uint16_t new_speed = atoi(&rcv_buff[6]);
+    if (new_speed > 0) {
+      effect_dly = new_speed;
+      print_string("Speed updated\r\n");
+    } else {
+      print_string("Invalid speed\r\n");
+    }
+  } 
+  else if (strncmp((const char*)rcv_buff, "effect", 6) == 0) {
+    uint8_t new_effect = atoi(&rcv_buff[7]);
+    if (new_effect < 3) {
+      effect = new_effect;
+      print_string("Effect changed\r\n");
+    } else {
+      print_string("Invalid effect\r\n");
+    }
+  } 
+  else if (strcmp((const char*)rcv_buff, "help") == 0) {
+    help(); // Call help function
+  }
+  else {
+    print_string("Invalid command\r\n");
+  }
+}
+
+//-----------------------------------------------------------------------------
+// Handle button press: change effect or toggle running state
+void handle_button(uint8_t kt) 
+{
+    if (kt == 2) {
+        if (!effect_running) {
+            effect = (effect + 1) % 3;
+        }
+        effect_running = 1;
+    } else {
+        effect_running = !effect_running;
+    }
+}
+
+//-----------------------------------------------------------------------------
+// Running Fire effect: Sequentially light up LEDs from left to right
+void running_fire_l(void) 
+{
+    static uint8_t d = 0x01;
+    d <<= 1;
+    if (d == 0) d = 0x01;
+    send_to_hc595(d);
+}
+
+//-----------------------------------------------------------------------------
+// Running Shadow effect: Sequentially turn off LEDs from left to right
+void running_shadow(void)
+{
+    static uint8_t d = 0x01;
+    d <<= 1;
+    if (d == 0) d = 0x01;
+    send_to_hc595(~d);
+}
+
+//-----------------------------------------------------------------------------
+// Johnson Counter effect: Bitwise shift left creating a rotating pattern
+void johnson_counter(void) 
+{
+    static uint8_t johnson = 0;
+    if (johnson & 128) {
+       johnson <<= 1; 
+    } else {
+        johnson <<= 1;
+        johnson |= 1;
+    }
+    send_to_hc595(johnson);
+}
+
+//-----------------------------------------------------------------------------
+// Executes the currently selected effect
+void execute_effect(void)
+{
+    switch (effect) {
+        case 0: running_fire_l(); break;
+        case 1: running_shadow(); break;
+        case 2: johnson_counter(); break;
+    }
+}
+
+//==============================================================================
+int main(void)
+{
+    uint16_t dly1 = 0;
+
+    // Set PORTD as output for LEDs
+    DDRB |= (1 << HC595_DATA) | (1 << HC595_SHCP) | (1 << HC595_STCP);
+    PORTB &= ~((1 << HC595_SHCP) | (1 << HC595_STCP));
+    send_to_hc595(0x81 + 0x18);
+    //DDRB |= 1 << PB2;
+    //DDRD = 0xFF;
+
+    // Initialize USART at 9600 baud
+    USART_Init(9600);
+    print_string("Light Effects Machine Ready\r\nType 'help' to see available commands.\r\n");
+
+    // Main loop
+    for (;;) 
+    {
+        uart_receive_line_nb(); // Non-blocking UART reception
+
+        if (effect_running && (++dly1 > effect_dly)) {
+            dly1 = 0;
+            execute_effect(); // Execute selected effect
+        }
+
+        _delay_ms(2); // Small delay
+    }
+    
+    return 0;
+}
